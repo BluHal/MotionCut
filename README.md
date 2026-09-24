@@ -42,7 +42,7 @@ This is a one-clip editing core. Multi-track editing, titles, color, audio tools
 
 ## GitHub account isolation
 
-This repository sets its Git author and credential helper locally. GitHub CLI credentials live under `.git/gh-config`; no global Git identity or credential helper is changed. For direct GitHub CLI commands in this checkout, run:
+This repository sets its Git author and credential helper locally. GitHub CLI configuration lives under `.git/gh-config`, while its authentication token is stored in this macOS user's Keychain. No global Git identity or credential helper is changed, and another macOS user has a separate Keychain. For direct GitHub CLI commands in this checkout, run:
 
 ```sh
 GH_CONFIG_DIR="$PWD/.git/gh-config" .git/tools/gh auth status
