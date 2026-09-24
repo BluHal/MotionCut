@@ -10,11 +10,13 @@ final class EditorModel: ObservableObject {
     @Published var plan: StabilizationPlan?
     @Published var player = AVPlayer()
     @Published var isAnalyzing = false
+    @Published var isPlanning = false
     @Published var isExporting = false
     @Published var isPlaying = false
     @Published var stabilizationEnabled = true
     @Published var strength = 0.55
     @Published var maxZoom = 1.20
+    @Published var stabilizationMode: StabilizationMode = .balanced
     @Published var currentTime = 0.0
     @Published var duration = 0.0
     @Published var trimStart = 0.0
@@ -34,9 +36,11 @@ final class EditorModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.currentTime = max(0, time.seconds.isFinite ? time.seconds : 0)
-                self.isPlaying = self.player.rate != 0
-                if self.trimEnd > self.trimStart && self.currentTime >= self.trimEnd {
+                if self.trimEnd > self.trimStart && self.currentTime >= self.trimEnd - 0.03 {
                     self.player.pause()
+                    self.isPlaying = false
+                } else {
+                    self.isPlaying = self.player.rate != 0
                 }
             }
         }
@@ -65,6 +69,7 @@ final class EditorModel: ObservableObject {
         player.pause()
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         isAnalyzing = true
+        isPlanning = false
         status = "Analyzing camera motion…"
         let task = Task.detached(priority: .userInitiated) {
             try await MotionAnalyzer.analyze(url)
@@ -94,15 +99,18 @@ final class EditorModel: ObservableObject {
     func updateStabilization() async {
         guard let analysis, let sourceURL else { return }
         planGeneration += 1
+        isPlanning = true
         let generation = planGeneration
         let source = sourceGeneration
         let wasPlaying = player.rate != 0
         let position = player.currentTime()
         let selectedStrength = strength
         let selectedMaxZoom = maxZoom
+        let selectedMode = stabilizationMode
         player.pause()
         let newPlan = await Task.detached(priority: .userInitiated) {
-            StabilizationPlan(analysis: analysis, strength: selectedStrength, maxZoom: selectedMaxZoom)
+            StabilizationPlan(analysis: analysis, strength: selectedStrength,
+                              maxZoom: selectedMaxZoom, mode: selectedMode)
         }.value
         guard generation == planGeneration, source == sourceGeneration else { return }
         plan = newPlan
@@ -124,8 +132,20 @@ final class EditorModel: ObservableObject {
         if wasPlaying { player.play() }
         isPlaying = wasPlaying
         status = stabilizationEnabled
-            ? "Stabilized · \(Int((newPlan.zoom - 1) * 100))% crop"
+            ? "\(selectedMode.title) · \(newPlan.frameCropPercent)% frame crop"
             : "Original preview"
+        isPlanning = false
+    }
+
+    func selectStabilizationMode(_ mode: StabilizationMode) async {
+        guard mode != stabilizationMode else { return }
+        stabilizationMode = mode
+        if mode == .cropAndSteady {
+            maxZoom = max(maxZoom, 1.5)
+        } else {
+            maxZoom = min(maxZoom, 1.5)
+        }
+        await updateStabilization()
     }
 
     func togglePlayback() {

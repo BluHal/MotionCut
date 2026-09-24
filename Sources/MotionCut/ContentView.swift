@@ -142,7 +142,7 @@ struct ContentView: View {
                 Label(editor.isExporting ? "Exporting…" : "Export", systemImage: "square.and.arrow.up")
             }
             .buttonStyle(InstrumentButton(primary: true))
-            .disabled(editor.sourceURL == nil || editor.isAnalyzing || editor.isExporting)
+            .disabled(editor.sourceURL == nil || editor.isAnalyzing || editor.isPlanning || editor.isExporting)
         }
         .padding(.horizontal, 22)
         .frame(height: 70)
@@ -291,6 +291,20 @@ struct ContentView: View {
                             Task { await editor.updateStabilization() }
                         }
                         .disabled(editor.analysis == nil)
+                    HStack(spacing: 6) {
+                        ForEach(StabilizationMode.allCases) { mode in
+                            Button(mode.title) {
+                                Task { await editor.selectStabilizationMode(mode) }
+                            }
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(editor.stabilizationMode == mode ? Instrument.field : Instrument.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                            .background(editor.stabilizationMode == mode ? Instrument.mint : Instrument.raised)
+                            .overlay(Rectangle().stroke(editor.stabilizationMode == mode ? Instrument.mint : Instrument.line))
+                            .buttonStyle(.plain)
+                            .disabled(editor.analysis == nil)
+                        }
+                    }
                     Divider().overlay(Instrument.line)
                     HStack {
                         Text("SMOOTHNESS")
@@ -305,18 +319,22 @@ struct ContentView: View {
                     .tint(Instrument.mint)
                     .disabled(editor.analysis == nil)
                     HStack {
-                        Text("MAXIMUM CROP")
+                        Text("MAX FRAME CROP")
                         Spacer()
-                        Text("\(Int(((editor.maxZoom - 1) * 100).rounded()))%")
+                        Text("\(Int(((1 - 1 / editor.maxZoom) * 100).rounded()))%")
                             .foregroundStyle(Instrument.amber)
                     }
                     .font(.system(size: 10, design: .monospaced))
-                    Slider(value: $editor.maxZoom, in: 1.02...1.5, onEditingChanged: { editing in
+                    Slider(value: $editor.maxZoom,
+                           in: 1.02...(editor.stabilizationMode == .cropAndSteady ? 2.0 : 1.5),
+                           onEditingChanged: { editing in
                         if !editing { Task { await editor.updateStabilization() } }
                     })
                     .tint(Instrument.amber)
                     .disabled(editor.analysis == nil)
-                    Text("Crop budget limits correction before empty borders appear.")
+                    Text(editor.stabilizationMode == .cropAndSteady
+                         ? "A steadier path uses more of the frame. Zoom stays constant and the crop limit prevents empty borders."
+                         : "Crop budget limits correction before empty borders appear.")
                         .font(.system(size: 11))
                         .foregroundStyle(Instrument.muted)
                 }

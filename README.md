@@ -11,17 +11,17 @@ Requires Xcode with the macOS SDK. No third-party runtime dependencies.
 open dist/MotionCut.app
 ```
 
-Open a local video, wait for camera-motion analysis, adjust smoothness and maximum crop, compare with the original, set in/out points, and export a `.mov` file. The exporter retains the source audio track where supported by AVFoundation.
+Open a local video, wait for camera-motion analysis, choose Balanced or Crop + steady, adjust smoothness and maximum frame crop, compare with the original, set in/out points, and export a `.mov` file. The exporter retains the source audio track where supported by AVFoundation.
 
 ## Stabilization implementation
 
 1. Decode frames and sample a reduced-resolution grayscale image.
-2. Estimate motion with Apple's Vision optical flow, fit a similarity transform using RANSAC, and fall back to textured patch matching if flow cannot provide a reliable estimate.
+2. Estimate motion with Apple's Vision optical flow, fit a similarity transform using RANSAC, and fall back to textured patch matching if flow cannot provide a reliable estimate. Untrackable frames coast on the last camera position; only a likely scene cut resets the path.
 3. Compose the measured motion into a camera path.
-4. Solve for a smoother path with an iteratively reweighted L1-style acceleration penalty.
+4. Solve for a smoother path with an iteratively reweighted L1-style acceleration penalty. Crop + steady uses a stronger penalty and a shot-local temporal low-pass filter.
 5. Apply a rigid correction and a constant crop, limiting correction to the selected crop budget.
 
-The rigid transform avoids introducing mesh-induced bending. The motion graph shows recorded and corrected horizontal paths. This is a practical research-inspired baseline, **not** a reproduction of CamFlow+, a depth-aware stabilizer, or Gyroflow. It does not correct rolling shutter or parallax; those need their own calibrated or depth-aware paths. Analysis currently scans the full clip and may be slow for long 4K media.
+The rigid transform avoids introducing mesh-induced bending. The motion graph shows recorded and corrected horizontal paths. Crop + steady can spend up to 50% of each frame dimension on a constant crop (2× zoom); it only uses as much as the estimated correction needs. Crop cannot fix motion-estimation errors, rolling shutter, or parallax. This is a practical research-inspired baseline, **not** a reproduction of CamFlow+, a depth-aware stabilizer, or Gyroflow. Analysis currently scans the full clip and may be slow for long 4K media.
 
 ## Architecture
 

@@ -71,7 +71,14 @@ enum MotionAnalyzer {
             let flowBuffer = image.makePixelBuffer()
             let timestamp = CMSampleBufferGetPresentationTimeStamp(sample)
 
-            if let previous {
+            if let previous, likelySceneCut(from: previous, to: image) {
+                // A visual edit starts a new camera path even if a matcher happens
+                // to find some similar features in the two unrelated shots.
+                segment += 1
+                cumulative = .identity
+                samples.append(MotionSample(time: timestamp, cumulative: cumulative,
+                                            segment: segment, inlierRatio: 0))
+            } else if let previous {
                 let estimate: Estimate
                 if let previousFlowBuffer, let flowBuffer,
                    let visionEstimate = estimateVision(from: previousFlowBuffer,
@@ -87,10 +94,6 @@ enum MotionAnalyzer {
                     let toRaw = CGAffineTransform(scaleX: 1 / image.scale, y: 1 / image.scale)
                     let rawMotion = toAnalysis.concatenating(estimate.transform).concatenating(toRaw)
                     cumulative = cumulative.concatenating(rawMotion)
-                } else {
-                    // Do not smooth motion across a cut or an untrackable transition.
-                    segment += 1
-                    cumulative = .identity
                 }
                 samples.append(MotionSample(time: timestamp, cumulative: cumulative,
                                             segment: segment, inlierRatio: estimate.inlierRatio))
@@ -109,6 +112,29 @@ enum MotionAnalyzer {
         return MotionAnalysis(samples: samples, rawSize: rawSize,
                               displayTransform: displayTransform, displaySize: displaySize,
                               duration: duration, nominalFrameRate: nominalFrameRate)
+    }
+
+    private static func likelySceneCut(from previous: GrayFrame, to current: GrayFrame) -> Bool {
+        guard previous.width == current.width, previous.height == current.height else { return true }
+        var oldHistogram = [Int](repeating: 0, count: 16)
+        var newHistogram = [Int](repeating: 0, count: 16)
+        var difference = 0
+        var count = 0
+        for y in stride(from: 0, to: previous.height, by: 4) {
+            for x in stride(from: 0, to: previous.width, by: 4) {
+                let old = previous[x, y]
+                let new = current[x, y]
+                oldHistogram[old / 16] += 1
+                newHistogram[new / 16] += 1
+                difference += abs(old - new)
+                count += 1
+            }
+        }
+        guard count > 0, Double(difference) / Double(count) > 35 else { return false }
+        let histogramDistance = zip(oldHistogram, newHistogram).reduce(0) {
+            $0 + abs($1.0 - $1.1)
+        }
+        return Double(histogramDistance) / Double(count) > 0.65
     }
 
     private struct GrayFrame {

@@ -1,6 +1,19 @@
 import AVFoundation
 import CoreGraphics
 
+enum StabilizationMode: String, CaseIterable, Identifiable {
+    case balanced
+    case cropAndSteady
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .balanced: "BALANCED"
+        case .cropAndSteady: "CROP + STEADY"
+        }
+    }
+}
+
 struct StabilizedFrame {
     let time: CMTime
     let correction: CGAffineTransform
@@ -12,8 +25,10 @@ struct StabilizationPlan {
     let zoom: CGFloat
     let appliedFraction: CGFloat
     let averageConfidence: Double
+    var frameCropPercent: Int { Int(((1 - 1 / zoom) * 100).rounded()) }
 
-    init(analysis: MotionAnalysis, strength: Double, maxZoom: Double) {
+    init(analysis: MotionAnalysis, strength: Double, maxZoom: Double,
+         mode: StabilizationMode = .balanced) {
         let samples = analysis.samples
         let center = CGPoint(x: analysis.rawSize.width / 2, y: analysis.rawSize.height / 2)
         let radius = max(1, min(analysis.rawSize.width, analysis.rawSize.height) / 2)
@@ -31,11 +46,15 @@ struct StabilizationPlan {
                         atan2(sample.cumulative.b, sample.cumulative.a) * radius,
                         log(scale) * radius)
             }
-            let x = Self.smooth(paths.map { Double($0.0) }, strength: strength)
-            let y = Self.smooth(paths.map { Double($0.1) }, strength: strength)
+            let x = Self.smooth(paths.map { Double($0.0) }, strength: strength,
+                                frameRate: analysis.nominalFrameRate, mode: mode)
+            let y = Self.smooth(paths.map { Double($0.1) }, strength: strength,
+                                frameRate: analysis.nominalFrameRate, mode: mode)
             let angles = Self.unwrap(paths.map { Double($0.2) }, period: Double.pi * 2 * Double(radius))
-            let theta = Self.smooth(angles, strength: strength)
-            let logarithmicScale = Self.smooth(paths.map { Double($0.3) }, strength: strength)
+            let theta = Self.smooth(angles, strength: strength,
+                                    frameRate: analysis.nominalFrameRate, mode: mode)
+            let logarithmicScale = Self.smooth(paths.map { Double($0.3) }, strength: strength,
+                                               frameRate: analysis.nominalFrameRate, mode: mode)
 
             for local in segment.indices {
                 let desired = Self.similarity(center: center,
@@ -84,9 +103,11 @@ struct StabilizationPlan {
 
     // IRLS minimizes fidelity plus an L1-like acceleration penalty.
     // It favors steady pans and stationary intervals over a continuously drifting average.
-    private static func smooth(_ input: [Double], strength: Double) -> [Double] {
+    private static func smooth(_ input: [Double], strength: Double, frameRate: Float,
+                               mode: StabilizationMode) -> [Double] {
         guard input.count >= 4, strength > 0 else { return input }
-        let lambda = 1.0 + 320.0 * strength * strength
+        let lambda = (1.0 + 320.0 * strength * strength) *
+            (mode == .cropAndSteady ? 30.0 : 1.0)
         var solution = input
         for _ in 0..<5 {
             let weights = (0..<(input.count - 2)).map { i -> Double in
@@ -95,7 +116,32 @@ struct StabilizationPlan {
             }
             solution = conjugateGradient(rhs: input, initial: solution, weights: weights, lambda: lambda)
         }
+        if mode == .cropAndSteady {
+            // A wider, symmetric temporal filter removes residual walking jitter.
+            // Each shot is processed independently, so cuts never bleed together.
+            let fps = frameRate > 1 ? min(120, Double(frameRate)) : 30
+            return gaussianSmooth(solution, sigma: 0.65 * strength * fps)
+        }
         return solution
+    }
+
+    private static func gaussianSmooth(_ input: [Double], sigma: Double) -> [Double] {
+        guard sigma >= 0.5 else { return input }
+        let radius = min(input.count - 1, Int(ceil(3 * sigma)))
+        let weights = (0...radius).map { offset in
+            exp(-0.5 * pow(Double(offset) / sigma, 2))
+        }
+        return input.indices.map { index in
+            var total = 0.0
+            var weightSum = 0.0
+            for offset in -radius...radius {
+                let position = min(input.count - 1, max(0, index + offset))
+                let weight = weights[abs(offset)]
+                total += input[position] * weight
+                weightSum += weight
+            }
+            return total / weightSum
+        }
     }
 
     private static func conjugateGradient(rhs: [Double], initial: [Double],
