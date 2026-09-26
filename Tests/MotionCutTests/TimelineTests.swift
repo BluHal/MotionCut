@@ -67,7 +67,9 @@ final class TimelineTests: XCTestCase {
                 (0..<2).map { red in "\(red) \(green) \(blue)" }
             }
         }
-        try ("LUT_3D_SIZE 2\n" + rows.joined(separator: "\n"))
+        try ("#title:FLog2_FGamut_to_WDR_BT.709\n#FUJIFILM Corporation\n" +
+             "TITLE \"FLog2 test\"\nLUT_3D_SIZE 2 # inline comment\n" +
+             rows.joined(separator: "\n"))
             .write(to: file, atomically: true, encoding: .utf8)
         let lut = try CubeLUT(url: file)
         XCTAssertEqual(lut.dimension, 2)

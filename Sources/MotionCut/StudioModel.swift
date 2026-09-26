@@ -471,13 +471,13 @@ final class StudioModel: ObservableObject {
                 guard url.pathExtension.lowercased() == "cube" else {
                     throw CubeLUTError.malformed("select a .cube file")
                 }
+                let parsed = try CubeLUT(url: url)
                 let folder = FileManager.default.urls(for: .applicationSupportDirectory,
                                                        in: .userDomainMask)[0]
                     .appendingPathComponent("MotionCut/LUTs", isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 let destination = folder.appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent)
                 try FileManager.default.copyItem(at: url, to: destination)
-                let parsed = try CubeLUT(url: destination)
                 let asset = LUTAsset(url: destination)
                 parsedLUTs[asset.id] = parsed
                 commit("Import LUT") { $0.luts.append(asset) }

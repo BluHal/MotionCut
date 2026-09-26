@@ -22,7 +22,7 @@ struct CubeLUT: Sendable {
         var minimum: [Float] = [0, 0, 0]
         var maximum: [Float] = [1, 1, 1]
         for rawLine in source.components(separatedBy: .newlines) {
-            let line = String(rawLine.split(separator: "#", maxSplits: 1).first ?? "")
+            let line = String(rawLine.prefix(while: { $0 != "#" }))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty else { continue }
             let fields = line.split(whereSeparator: \.isWhitespace).map(String.init)
