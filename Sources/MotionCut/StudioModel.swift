@@ -125,26 +125,10 @@ final class StudioModel: ObservableObject {
             catch { errorMessage = error.localizedDescription }
         }
         guard !additions.isEmpty else { return }
-        let placeVideos = project.tracks.flatMap(\.clips).isEmpty
-        commit("Import media") { project in
-            project.media.append(contentsOf: additions)
-            if placeVideos, let first = additions.first(where: { $0.kind == .video }) {
-                project.canvasWidth = max(2, first.width)
-                project.canvasHeight = max(2, first.height)
-                var start = 0.0
-                if let lane = project.tracks.firstIndex(where: { $0.name == "V1" }) {
-                    for media in additions where media.kind == .video {
-                        project.tracks[lane].clips.append(TimelineClip(
-                            mediaID: media.id, start: start, duration: media.duration,
-                            stabilized: true))
-                        start += media.duration
-                    }
-                }
-            }
-        }
+        rememberUndo()
+        project.media.append(contentsOf: additions)
         selectedMediaID = additions.first?.id
         status = "Imported \(additions.count) media item\(additions.count == 1 ? "" : "s")"
-        for media in additions where media.kind == .video { analyze(media) }
     }
 
     private func mediaMetadata(for url: URL) async throws -> MediaAsset {
@@ -186,6 +170,12 @@ final class StudioModel: ObservableObject {
                                 duration: media.kind == .image ? 6 : media.duration,
                                 stabilized: media.kind == .video)
         commit("Add clip") { project in
+            if media.kind == .video && !project.tracks.flatMap(\.clips).contains(where: {
+                $0.mediaID != nil && project.media(for: $0)?.kind == .video
+            }) {
+                project.canvasWidth = max(2, media.width)
+                project.canvasHeight = max(2, media.height)
+            }
             project.tracks[project.tracks.firstIndex(where: { $0.id == target.id })!].clips.append(clip)
         }
         selectOnly(clip.id)
@@ -489,7 +479,7 @@ final class StudioModel: ObservableObject {
         }
     }
 
-    func addLibrarySound(_ sound: LibrarySound) {
+    func addLibrarySound(_ sound: LibrarySound, on trackID: UUID? = nil, at time: Double? = nil) {
         Task {
             do {
                 let url = try await Task.detached(priority: .userInitiated) {
@@ -497,7 +487,9 @@ final class StudioModel: ObservableObject {
                 }.value
                 if !project.media.contains(where: { $0.url == url }) { await importMedia([url]) }
                 guard let media = project.media.first(where: { $0.url == url }) else { return }
-                addMediaToTimeline(media.id, on: project.tracks.first(where: { $0.name == "A1" })?.id)
+                addMediaToTimeline(media.id,
+                    on: trackID ?? project.tracks.first(where: { $0.name == "A1" })?.id,
+                    at: time)
             } catch { errorMessage = error.localizedDescription }
         }
     }

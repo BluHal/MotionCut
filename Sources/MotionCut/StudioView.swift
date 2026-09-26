@@ -78,6 +78,15 @@ struct StudioView: View {
     @State private var search = ""
     @State private var audioCategory = "All"
     @State private var timelineZoom = 66.0
+    @AppStorage("showLibraryPanel") private var showLibrary = true
+    @AppStorage("showInspectorPanel") private var showInspector = true
+    @AppStorage("showTimelinePanel") private var showTimeline = true
+    @AppStorage("libraryPanelWidth") private var libraryWidth = 250.0
+    @AppStorage("inspectorPanelWidth") private var inspectorWidth = 265.0
+    @AppStorage("timelinePanelHeight") private var timelineHeight = 310.0
+    @State private var libraryResizeStart: Double?
+    @State private var inspectorResizeStart: Double?
+    @State private var timelineResizeStart: Double?
     @State private var titleDraft = ""
     @State private var startDraft = ""
     @State private var endDraft = ""
@@ -93,14 +102,36 @@ struct StudioView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            HStack(spacing: 12) {
-                browserPanel.frame(width: 250)
-                programPanel.frame(maxWidth: .infinity)
-                inspectorPanel.frame(width: 265)
+            GeometryReader { geometry in
+                let sideBudget = max(0, geometry.size.width - 500)
+                let desiredSides = (showLibrary ? libraryWidth : 0) +
+                    (showInspector ? inspectorWidth : 0)
+                let sideScale = min(1, sideBudget / max(1, desiredSides))
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        if showLibrary {
+                            browserPanel.frame(width: libraryWidth * sideScale)
+                            verticalResizeHandle(isLibrary: true)
+                        }
+                        programPanel.frame(maxWidth: .infinity)
+                        if showInspector {
+                            verticalResizeHandle(isLibrary: false)
+                            inspectorPanel.frame(width: inspectorWidth * sideScale)
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                    .padding(.bottom, showTimeline ? 0 : 12)
+                    if showTimeline {
+                        timelineResizeHandle(availableHeight: geometry.size.height)
+                        timelinePanel
+                            .frame(height: min(timelineHeight, max(270, geometry.size.height - 330)))
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 12)
+                    }
+                }
             }
-            .frame(maxHeight: .infinity)
-            .padding(12)
-            timelinePanel.frame(height: 310).padding(.horizontal, 12)
             statusBar
         }
         .background(StudioStyle.field)
@@ -142,6 +173,10 @@ struct StudioView: View {
                 .onSubmit { editor.project.name = nameDraft }
                 .onAppear { nameDraft = editor.project.name }
             Spacer()
+            panelToggle("sidebar.left", title: "Library", isShown: $showLibrary)
+            panelToggle("sidebar.right", title: "Inspector", isShown: $showInspector)
+            panelToggle("rectangle.bottomthird.inset.filled", title: "Timeline", isShown: $showTimeline)
+            StudioStyle.line.frame(width: 1, height: 26).padding(.horizontal, 2)
             Button("New") { editor.newProject() }.buttonStyle(StudioButton())
             Button("Open") { editor.openProjectPanel() }.buttonStyle(StudioButton())
             Button("Save") { editor.project.name = nameDraft; editor.saveProject() }.buttonStyle(StudioButton())
@@ -157,6 +192,59 @@ struct StudioView: View {
         .frame(height: 64)
         .background(Color(red: 11/255, green: 17/255, blue: 19/255))
         .overlay(alignment: .bottom) { StudioStyle.line.frame(height: 1) }
+    }
+
+    private func panelToggle(_ symbol: String, title: String,
+                             isShown: Binding<Bool>) -> some View {
+        Button { isShown.wrappedValue.toggle() } label: {
+            Image(systemName: symbol)
+                .foregroundStyle(isShown.wrappedValue ? StudioStyle.mint : StudioStyle.muted)
+                .frame(width: 15)
+        }
+        .buttonStyle(StudioButton())
+        .help("\(isShown.wrappedValue ? "Hide" : "Show") \(title)")
+        .accessibilityLabel("\(isShown.wrappedValue ? "Hide" : "Show") \(title)")
+    }
+
+    private func verticalResizeHandle(isLibrary: Bool) -> some View {
+        Rectangle()
+            .fill(StudioStyle.line)
+            .frame(width: 2, height: 38)
+            .frame(width: 10)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    if isLibrary {
+                        if libraryResizeStart == nil { libraryResizeStart = libraryWidth }
+                        libraryWidth = min(420, max(180, libraryResizeStart! + value.translation.width))
+                    } else {
+                        if inspectorResizeStart == nil { inspectorResizeStart = inspectorWidth }
+                        inspectorWidth = min(420, max(180, inspectorResizeStart! - value.translation.width))
+                    }
+                }
+                .onEnded { _ in
+                    libraryResizeStart = nil
+                    inspectorResizeStart = nil
+                })
+            .help(isLibrary ? "Drag to resize Library" : "Drag to resize Inspector")
+    }
+
+    private func timelineResizeHandle(availableHeight: CGFloat) -> some View {
+        Rectangle()
+            .fill(StudioStyle.line)
+            .frame(width: 38, height: 2)
+            .frame(maxWidth: .infinity)
+            .frame(height: 10)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    if timelineResizeStart == nil { timelineResizeStart = timelineHeight }
+                    timelineHeight = min(max(270, availableHeight - 330),
+                                         max(270, timelineResizeStart! - value.translation.height))
+                }
+                .onEnded { _ in timelineResizeStart = nil })
+            .help("Drag to resize Timeline")
     }
 
     private var browserPanel: some View {
@@ -232,7 +320,8 @@ struct StudioView: View {
                     .background(StudioStyle.raised)
                     .overlay(Rectangle().stroke(StudioStyle.line))
                     .onTapGesture { editor.selectedMediaID = media.id }
-                    .onDrag { NSItemProvider(object: media.id.uuidString as NSString) }
+                    .draggable("media:\(media.id.uuidString)")
+                    .help("Drag onto a compatible timeline track, or click + to add at the playhead")
                 }
                 if editor.project.media.isEmpty { emptyMessage("Drop files here or import media") }
             }
@@ -266,7 +355,8 @@ struct StudioView: View {
                         }
                         .padding(8).background(StudioStyle.raised)
                         .overlay(Rectangle().stroke(StudioStyle.line))
-                        .onDrag { NSItemProvider(object: media.id.uuidString as NSString) }
+                        .draggable("media:\(media.id.uuidString)")
+                        .help("Drag onto an audio track")
                     }
                 }
                 Text("STARTER SOUNDS").font(.system(size: 9, design: .monospaced))
@@ -292,6 +382,8 @@ struct StudioView: View {
                     }
                     .padding(8).background(StudioStyle.raised)
                     .overlay(Rectangle().stroke(StudioStyle.line))
+                    .draggable("sound:\(sound.id)")
+                    .help("Drag onto an audio track")
                 }
             }
         } else {
@@ -343,10 +435,17 @@ struct StudioView: View {
                             Image(systemName: "film.stack").font(.system(size: 44, weight: .ultraLight))
                                 .foregroundStyle(StudioStyle.mint)
                             Text("READY TO CREATE").font(.system(size: 15, weight: .bold, design: .monospaced))
-                            Text("Import a video, then edit on the timeline below.")
+                            Text(editor.project.media.isEmpty
+                                 ? "Import media into the Library to get started."
+                                 : "Drag media from the Library onto a timeline track, or click +.")
                                 .font(.system(size: 11)).foregroundStyle(StudioStyle.secondary)
-                            Button("Import media") { editor.importMediaPanel() }
-                                .buttonStyle(StudioButton(primary: true))
+                            if editor.project.media.isEmpty {
+                                Button("Import media") { editor.importMediaPanel() }
+                                    .buttonStyle(StudioButton(primary: true))
+                            } else if !showLibrary {
+                                Button("Show Library") { showLibrary = true }
+                                    .buttonStyle(StudioButton(primary: true))
+                            }
                         }
                     }
                 }
@@ -725,16 +824,24 @@ struct StudioView: View {
         .frame(width: width, height: 45)
         .overlay(alignment: .bottom) { StudioStyle.line.frame(height: 1) }
         .onTapGesture { focusTimeline(); editor.selectedTrackID = track.id }
-        .onDrop(of: [.plainText], isTargeted: nil) { providers, location in
-            guard let provider = providers.first else { return false }
-            _ = provider.loadObject(ofClass: NSString.self) { value, _ in
-                guard let text = value as? String, let id = UUID(uuidString: text) else { return }
-                Task { @MainActor in
-                    editor.addMediaToTimeline(id, on: track.id,
-                        at: Double(location.x / timelineZoom))
-                }
+        .dropDestination(for: String.self) { items, location in
+            guard !track.isLocked, let item = items.first else { return false }
+            let time = Double(max(0, location.x) / timelineZoom)
+            if item.hasPrefix("media:"),
+               let id = UUID(uuidString: String(item.dropFirst(6))),
+               let media = editor.project.media.first(where: { $0.id == id }),
+               (media.kind == .audio ? TrackKind.audio : .video) == track.kind {
+                editor.addMediaToTimeline(id, on: track.id, at: time)
+                focusTimeline()
+                return true
             }
-            return true
+            if item.hasPrefix("sound:"), track.kind == .audio,
+               let sound = LibrarySound.all.first(where: { $0.id == String(item.dropFirst(6)) }) {
+                editor.addLibrarySound(sound, on: track.id, at: time)
+                focusTimeline()
+                return true
+            }
+            return false
         }
     }
 

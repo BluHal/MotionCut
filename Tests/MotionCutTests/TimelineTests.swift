@@ -172,4 +172,24 @@ final class TimelineTests: XCTestCase {
         editor.selectClip(c.id)
         XCTAssertEqual(editor.selectedClipIDs, [c.id])
     }
+
+    @MainActor
+    func testImportKeepsVideoInLibraryUntilPlacedOnTrack() async throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Resources/Timing.mov")
+        let editor = StudioModel()
+        await editor.importMedia([fixture])
+
+        let video = try XCTUnwrap(editor.project.media.first)
+        XCTAssertEqual(video.kind, .video)
+        XCTAssertTrue(editor.project.tracks.allSatisfy { $0.clips.isEmpty })
+        XCTAssertEqual(editor.duration, 0)
+
+        let lane = try XCTUnwrap(editor.project.tracks.first { $0.name == "V1" })
+        editor.addMediaToTimeline(video.id, on: lane.id, at: 3)
+        let clip = try XCTUnwrap(editor.project.tracks.first { $0.id == lane.id }?.clips.first)
+        XCTAssertEqual(clip.mediaID, video.id)
+        XCTAssertEqual(clip.start, 3, accuracy: 0.001)
+    }
 }
