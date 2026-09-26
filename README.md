@@ -1,51 +1,56 @@
 # MotionCut
 
-A native macOS video editor prototype focused on stabilization. The UI follows the Instrument Design System from BluHal's `instrument-ui-demo`: dark field, quiet measurement grid, restrained mint signal, amber caution, and readable controls.
+A native macOS timeline editor with a local-first workflow and no subscription or account. Its dark, mint-and-amber interface follows [BluHal's Instrument UI style guide](https://github.com/BluHal/instrument-ui-demo).
 
 ## Run
 
-Requires Xcode with the macOS SDK. No third-party runtime dependencies.
+Requires Xcode and the macOS SDK. There are no third-party runtime dependencies.
 
 ```sh
 ./Scripts/build-app.sh
 open dist/MotionCut.app
 ```
 
-Open a local video, wait for camera-motion analysis, choose Balanced or Crop + steady, adjust smoothness and maximum frame crop, compare with the original, set in/out points, and export a `.mov` file. The exporter retains the source audio track where supported by AVFoundation.
+## Editing workflow
 
-## Stabilization implementation
+1. Import video, images, and audio. The first imported videos are placed in sequence on V1; later imports remain in the media library until added at the playhead.
+2. Click the ruler or monitor scrubber to place the playhead. Select a clip and press **⌘B** or **Split** to cut it at that point. Drag clips to move them; drag their colored edges to trim. The inspector offers precise start, source in, and end fields and a track picker.
+3. Use **Delete** to leave a gap or **Ripple delete** to close that span across unlocked tracks. Add video/audio tracks with **+V** and **+A**. Detach a video's recorded audio onto A1 when you want to cut or move it independently. Track mute affects audio; lock prevents edits. Undo/redo work on project edits.
+4. Use the inspector for speed, scale, position, opacity, brightness, contrast, saturation, audio level, and fades. Overlap clips and use fades for crossfades. Add centered title clips with **Text** and edit the words in the inspector.
+5. Import a 1D or 3D `.cube` LUT and apply it to a selected video or image clip. The LUT browser can search imported looks.
+6. Browse the built-in audio starter pack by category, preview a sound, and add it to an audio track. Import your own audio for a searchable personal library.
+7. Save a `.motioncut.json` project and export the timeline to MP4 or MOV. Preview and export use the same custom compositor; a tiny bundled timing video lets images, titles, and audio continue after source footage ends.
 
-1. Decode frames and sample a reduced-resolution grayscale image.
-2. Estimate motion with Apple's Vision optical flow, fit a similarity transform using RANSAC, and fall back to textured patch matching if flow cannot provide a reliable estimate. Untrackable frames coast on the last camera position; only a likely scene cut resets the path.
-3. Compose the measured motion into a camera path.
-4. Solve for a smoother path with an iteratively reweighted L1-style acceleration penalty. Crop + steady uses a stronger penalty and a shot-local temporal low-pass filter.
-5. Apply a rigid correction and a constant crop, limiting correction to the selected crop budget.
+Project files refer to media by its absolute path. Keep source files available at those paths when reopening a project. The built-in sounds are nine locally synthesized starter clips, not a licensed commercial music catalog. Audio-only projects export as a black video with their audio. This release does not yet provide waveform views, proxy media, multicam, keyframes, subtitle generation, or a large licensed sound catalog.
 
-The rigid transform avoids introducing mesh-induced bending. The motion graph shows recorded and corrected horizontal paths. Crop + steady can spend up to 50% of each frame dimension on a constant crop (2× zoom); it only uses as much as the estimated correction needs. Crop cannot fix motion-estimation errors, rolling shutter, or parallax. This is a practical research-inspired baseline, **not** a reproduction of CamFlow+, a depth-aware stabilizer, or Gyroflow. Analysis currently scans the full clip and may be slow for long 4K media.
+## Stabilization
+
+Each video clip can use Balanced or Crop + steady stabilization. MotionCut estimates frame motion with Vision optical flow and a RANSAC similarity fit, smooths the resulting camera path, then applies a rigid correction and bounded crop. The rigid transform avoids the wobbly bending caused by mesh warps. Analysis scans the full source clip and can take time on long 4K media. Crop cannot remove rolling shutter or parallax. The implementation is research-inspired; it is not a reproduction of CamFlow+, Gyroflow, or a depth-aware model.
 
 ## Architecture
 
-- `MotionAnalyzer.swift`: decoding, matching, robust motion fitting.
-- `StabilizationPlan.swift`: path optimization and crop bound.
-- `VideoCompositionBuilder.swift`: shared transform composition for preview and export.
-- `EditorModel.swift`: document and playback state.
-- `ContentView.swift`: native SwiftUI editor.
+- `TimelineProject.swift`: project, media, tracks, clips, split/ripple/move/trim operations.
+- `TimelineRenderer.swift`: AVFoundation composition, Metal-backed Core Image compositor, titles, color, fades, and audio mix.
+- `CubeLUT.swift`: `.cube` parsing and Core Image color-cube conversion.
+- `AudioLibrary.swift`: built-in locally synthesized sounds.
+- `MotionAnalyzer.swift` and `StabilizationPlan.swift`: motion estimation and crop-constrained path smoothing.
+- `StudioModel.swift` and `StudioView.swift`: project state and native SwiftUI editor.
 
-This is a one-clip editing core. Multi-track editing, titles, color, audio tools, project persistence, gyro telemetry, and depth-aware correction remain future work.
+Run model and parser tests with `swift test`. A manual composition smoke test also exported video, image, title, LUT, audio, fades, and speed to MP4. The app was visually checked with `/Volumes/Untitled/DCIM/101_FUJI/DSCF2251.MP4`.
 
 ## Research and platform references
 
-- [Apple Vision optical flow request](https://developer.apple.com/documentation/vision/vngenerateopticalflowrequest) supplies dense frame-to-frame motion estimates on macOS.
-- [Auto-Directed Video Stabilization with Robust L1 Optimal Camera Paths](https://research.google/pubs/auto-directed-video-stabilization-with-robust-l1-optimal-camera-paths/) motivates the path smoothing objective; this project uses a simpler acceleration-focused approximation.
-- [CamFlow+](https://arxiv.org/abs/2606.05915) is a recent flow-based research direction, but its full model is not implemented here.
-- [Gyroflow](https://github.com/gyroflow/gyroflow) is a useful reference for future gyro-assisted stabilization.
+- [Apple Vision optical flow request](https://developer.apple.com/documentation/vision/vngenerateopticalflowrequest).
+- [Apple custom video compositing](https://developer.apple.com/documentation/avfoundation/avvideocompositing).
+- [Auto-Directed Video Stabilization with Robust L1 Optimal Camera Paths](https://research.google/pubs/auto-directed-video-stabilization-with-robust-l1-optimal-camera-paths/).
+- [CamFlow+](https://arxiv.org/abs/2606.05915) and [Gyroflow](https://github.com/gyroflow/gyroflow) are useful future research directions.
 
 ## GitHub account isolation
 
-This repository sets its Git author and credential helper locally. GitHub CLI configuration lives under `.git/gh-config`, while its authentication token is stored in this macOS user's Keychain. No global Git identity or credential helper is changed, and another macOS user has a separate Keychain. For direct GitHub CLI commands in this checkout, run:
+This repository sets its Git author and credential helper locally. GitHub CLI configuration lives under `.git/gh-config`, while its authentication token is stored in this macOS user's Keychain. No global Git identity or credential helper is changed; another macOS user has a separate Keychain. For direct GitHub CLI commands in this checkout, run:
 
 ```sh
 GH_CONFIG_DIR="$PWD/.git/gh-config" .git/tools/gh auth status
 ```
 
-The `.git` directory is local metadata and is not included when the repository is cloned elsewhere. On another Mac, install GitHub CLI and authenticate that checkout separately.
+The `.git` directory is local metadata and is not included when the repository is cloned elsewhere. Authenticate each new checkout separately.

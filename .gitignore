@@ -3,3 +3,4 @@ dist/
 .DS_Store
 *.mov
 *.mp4
+!Resources/Timing.mov

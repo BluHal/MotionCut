@@ -1,7 +1,7 @@
 import AVFoundation
 import CoreGraphics
 
-enum StabilizationMode: String, CaseIterable, Identifiable {
+enum StabilizationMode: String, Codable, CaseIterable, Identifiable {
     case balanced
     case cropAndSteady
 

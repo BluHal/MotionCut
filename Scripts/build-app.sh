@@ -9,6 +9,7 @@ app_dir="$project_dir/dist/MotionCut.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$project_dir/.build/release/MotionCut" "$app_dir/Contents/MacOS/MotionCut"
 cp "$project_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
+cp "$project_dir/Resources/Timing.mov" "$app_dir/Contents/Resources/Timing.mov"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
