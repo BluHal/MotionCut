@@ -81,6 +81,11 @@ final class TimelineTests: XCTestCase {
         XCTAssertThrowsError(try CubeLUT(url: file))
     }
 
+    func testImportedLUTNameHidesStorageIdentifier() {
+        let url = URL(fileURLWithPath: "/tmp/418DA1A1-B57B-41AE-98CD-E171BA2EB0EB-XM5_FLog2_FGamut_to_WDR_BT.709.cube")
+        XCTAssertEqual(LUTAsset(url: url).name, "XM5_FLog2_FGamut_to_WDR_BT.709")
+    }
+
     func testProjectRoundTripPreservesEditingSettings() throws {
         var project = EditingProject()
         project.stabilizationMode = .cropAndSteady

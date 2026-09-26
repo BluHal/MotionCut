@@ -668,16 +668,21 @@ struct StudioView: View {
     }
 
     private func ruler(width: CGFloat) -> some View {
-        ZStack(alignment: .leading) {
+        ZStack(alignment: .topLeading) {
             StudioStyle.raised
             let count = Int(width / timelineZoom)
+            let labelEvery = rulerLabelInterval
             ForEach(0...max(0, count), id: \.self) { second in
-                VStack(alignment: .leading, spacing: 0) {
+                let labeled = second % labelEvery == 0
+                StudioStyle.line.frame(width: 1, height: labeled ? 10 : 5)
+                    .offset(x: CGFloat(second) * timelineZoom, y: labeled ? 19 : 24)
+                if labeled {
                     Text(editor.timecode(Double(second)))
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(StudioStyle.muted)
-                    StudioStyle.line.frame(width: 1, height: 8)
-                }.offset(x: CGFloat(second) * timelineZoom + 4)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .offset(x: CGFloat(second) * timelineZoom + 4, y: 3)
+                }
             }
             StudioStyle.mint.frame(width: 2, height: 30)
                 .offset(x: editor.currentTime * timelineZoom)
@@ -687,6 +692,11 @@ struct StudioView: View {
         .gesture(DragGesture(minimumDistance: 0).onChanged { value in
             editor.seek(to: value.location.x / timelineZoom)
         })
+    }
+
+    private var rulerLabelInterval: Int {
+        let steps = [1, 2, 3, 5, 10, 15, 30, 60, 120, 300, 600]
+        return steps.first { Double($0) * timelineZoom >= 76 } ?? steps[steps.count - 1]
     }
 
     private func trackLane(_ track: TimelineTrack, width: CGFloat) -> some View {

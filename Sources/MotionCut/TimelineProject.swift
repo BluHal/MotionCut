@@ -55,7 +55,14 @@ struct TimelineTrack: Identifiable, Codable, Equatable {
 struct LUTAsset: Identifiable, Codable, Equatable {
     var id = UUID()
     var url: URL
-    var name: String { url.deletingPathExtension().lastPathComponent }
+    var name: String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let prefix = String(stem.prefix(36))
+        if UUID(uuidString: prefix) != nil, stem.dropFirst(36).first == "-" {
+            return String(stem.dropFirst(37))
+        }
+        return stem
+    }
 }
 
 struct EditingProject: Codable, Equatable {
