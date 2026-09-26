@@ -1,4 +1,5 @@
 import AVKit
+import AppKit
 import SwiftUI
 
 private enum StudioStyle {
@@ -83,6 +84,11 @@ struct StudioView: View {
     @State private var sourceDraft = ""
     @State private var speedDraft = ""
     @State private var nameDraft = ""
+    @State private var bladeMode = false
+    @State private var draggingClipID: UUID?
+    @State private var dragOffset = CGSize.zero
+    @State private var cutDrag: (Double, Double)?
+    @FocusState private var timelineFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -226,6 +232,7 @@ struct StudioView: View {
                     .background(StudioStyle.raised)
                     .overlay(Rectangle().stroke(StudioStyle.line))
                     .onTapGesture { editor.selectedMediaID = media.id }
+                    .onDrag { NSItemProvider(object: media.id.uuidString as NSString) }
                 }
                 if editor.project.media.isEmpty { emptyMessage("Drop files here or import media") }
             }
@@ -259,6 +266,7 @@ struct StudioView: View {
                         }
                         .padding(8).background(StudioStyle.raised)
                         .overlay(Rectangle().stroke(StudioStyle.line))
+                        .onDrag { NSItemProvider(object: media.id.uuidString as NSString) }
                     }
                 }
                 Text("STARTER SOUNDS").font(.system(size: 9, design: .monospaced))
@@ -584,12 +592,23 @@ struct StudioView: View {
                         .buttonStyle(StudioButton()).disabled(!editor.canUndo).help("Undo ⌘Z")
                     Button { editor.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                         .buttonStyle(StudioButton()).disabled(!editor.canRedo).help("Redo ⇧⌘Z")
+                    Button { bladeMode = false; timelineFocused = true } label: {
+                        Label("Select", systemImage: "cursorarrow")
+                    }.buttonStyle(StudioButton(primary: !bladeMode)).help("Select tool V")
+                    Button { bladeMode = true; timelineFocused = true } label: {
+                        Label("Blade", systemImage: "scissors")
+                    }.buttonStyle(StudioButton(primary: bladeMode))
+                        .help("Click to split all tracks; drag to cut a time range · B")
                     Button { editor.splitAtPlayhead() } label: { Label("Split", systemImage: "scissors") }
                         .buttonStyle(StudioButton()).help("Split at playhead ⌘B")
+                    Button("Cut before") { editor.trimAtPlayhead(removeBefore: true) }
+                        .buttonStyle(StudioButton()).help("Trim selected clips before playhead · Q")
+                    Button("Cut after") { editor.trimAtPlayhead(removeBefore: false) }
+                        .buttonStyle(StudioButton()).help("Trim selected clips after playhead · W")
                     Button("Delete") { editor.deleteSelected(ripple: false) }
-                        .buttonStyle(StudioButton()).disabled(editor.selectedClip == nil)
+                        .buttonStyle(StudioButton()).disabled(editor.selectedClipIDs.isEmpty)
                     Button("Ripple delete") { editor.deleteSelected(ripple: true) }
-                        .buttonStyle(StudioButton()).disabled(editor.selectedClip == nil)
+                        .buttonStyle(StudioButton()).disabled(editor.selectedClipIDs.isEmpty)
                     Button { editor.addTitle() } label: { Label("Text", systemImage: "textformat") }
                         .buttonStyle(StudioButton())
                     Button("+V") { editor.addTrack(.video) }.buttonStyle(StudioButton()).help("Add video track")
@@ -619,6 +638,9 @@ struct StudioView: View {
                 Spacer(minLength: 0)
             }
         }
+        .focusable()
+        .focused($timelineFocused)
+        .onKeyPress { press in handleTimelineKey(press) }
     }
 
     private func trackHeader(_ track: TimelineTrack) -> some View {
@@ -675,17 +697,35 @@ struct StudioView: View {
                     .offset(x: CGFloat(second) * timelineZoom)
             }
             ForEach(track.clips) { clip in clipView(clip, track: track) }
+            if let cutDrag {
+                StudioStyle.amber.opacity(0.25)
+                    .frame(width: max(2, abs(cutDrag.1 - cutDrag.0) * timelineZoom))
+                    .offset(x: min(cutDrag.0, cutDrag.1) * timelineZoom)
+                    .allowsHitTesting(false)
+            }
             StudioStyle.mint.opacity(0.9).frame(width: 2)
                 .offset(x: editor.currentTime * timelineZoom)
                 .allowsHitTesting(false)
         }
         .frame(width: width, height: 45)
         .overlay(alignment: .bottom) { StudioStyle.line.frame(height: 1) }
+        .onTapGesture { focusTimeline(); editor.selectedTrackID = track.id }
+        .onDrop(of: [.plainText], isTargeted: nil) { providers, location in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+                guard let text = value as? String, let id = UUID(uuidString: text) else { return }
+                Task { @MainActor in
+                    editor.addMediaToTimeline(id, on: track.id,
+                        at: Double(location.x / timelineZoom))
+                }
+            }
+            return true
+        }
     }
 
     private func clipView(_ clip: TimelineClip, track: TimelineTrack) -> some View {
         let color = clip.isTitle ? StudioStyle.amber : track.kind == .audio ? StudioStyle.violet : StudioStyle.blue
-        let selected = editor.selectedClipID == clip.id
+        let selected = editor.selectedClipIDs.contains(clip.id)
         return HStack(spacing: 5) {
             Image(systemName: clip.isTitle ? "textformat" : track.kind == .audio ? "waveform" : "film")
                 .font(.system(size: 10))
@@ -703,28 +743,65 @@ struct StudioView: View {
                 .frame(width: 5, height: 33)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 3).onEnded { value in
-                    editor.selectedClipID = clip.id
+                    editor.selectOnly(clip.id)
                     editor.trimSelected(leading: clip.start + value.translation.width / timelineZoom)
                 })
+                .allowsHitTesting(!bladeMode)
         }
         .overlay(alignment: .trailing) {
             Rectangle().fill(StudioStyle.mint.opacity(selected ? 0.9 : 0.45))
                 .frame(width: 5, height: 33)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 3).onEnded { value in
-                    editor.selectedClipID = clip.id
+                    editor.selectOnly(clip.id)
                     editor.trimSelected(trailing: clip.end + value.translation.width / timelineZoom)
                 })
+                .allowsHitTesting(!bladeMode)
         }
-        .onTapGesture {
-            editor.selectedClipID = clip.id
-            editor.selectedTrackID = track.id
-        }
-        .gesture(DragGesture(minimumDistance: 5).onEnded { value in
-            editor.moveClip(clip.id, to: clip.start + value.translation.width / timelineZoom,
-                            on: track.id)
+        .simultaneousGesture(SpatialTapGesture().onEnded { value in
+            focusTimeline()
+            if bladeMode {
+                let time = clip.start + value.location.x / timelineZoom
+                editor.bladeCut(from: time, to: time)
+            } else {
+                let modifiers = NSEvent.modifierFlags
+                editor.selectClip(clip.id, additive: modifiers.contains(.command),
+                                  range: modifiers.contains(.shift))
+            }
         })
-        .offset(x: clip.start * timelineZoom)
+        .gesture(DragGesture(minimumDistance: 5).onChanged { value in
+            if bladeMode {
+                if cutDrag == nil { focusTimeline() }
+                cutDrag = (clip.start + value.startLocation.x / timelineZoom,
+                           clip.start + value.location.x / timelineZoom)
+            } else {
+                if draggingClipID == nil {
+                    focusTimeline()
+                    if !editor.selectedClipIDs.contains(clip.id) { editor.selectOnly(clip.id) }
+                    draggingClipID = clip.id
+                }
+                dragOffset = value.translation
+            }
+        }.onEnded { value in
+            if bladeMode {
+                editor.bladeCut(from: clip.start + value.startLocation.x / timelineZoom,
+                                to: clip.start + value.location.x / timelineZoom)
+                cutDrag = nil
+            } else {
+                if draggingClipID == nil { editor.selectOnly(clip.id) }
+                let vertical = Int((value.translation.height / 45).rounded())
+                if abs(value.translation.width) > 2 || vertical != 0 {
+                    editor.moveSelectedClips(by: value.translation.width / timelineZoom,
+                                             trackOffset: vertical)
+                }
+                draggingClipID = nil
+                dragOffset = .zero
+            }
+        })
+        .offset(x: clip.start * timelineZoom +
+            (draggingClipID != nil && selected ? dragOffset.width : 0),
+                y: draggingClipID != nil && selected ? dragOffset.height : 0)
+        .zIndex(draggingClipID != nil && selected ? 10 : 0)
     }
 
     private var statusBar: some View {
@@ -739,6 +816,41 @@ struct StudioView: View {
         .foregroundStyle(StudioStyle.muted)
         .padding(.horizontal, 16)
         .frame(height: 26)
+    }
+
+    private func handleTimelineKey(_ press: KeyPress) -> KeyPress.Result {
+        if press.modifiers.contains(.command) {
+            if press.key == "a" { editor.selectAllClips(); return .handled }
+            return .ignored
+        }
+        if press.key == .delete || press.key == .deleteForward ||
+            press.key.character == "\u{7f}" {
+            editor.deleteSelected(ripple: press.modifiers.contains(.shift))
+            return .handled
+        }
+        switch press.key {
+        case "v": bladeMode = false
+        case "b": bladeMode = true
+        case "q": editor.trimAtPlayhead(removeBefore: true)
+        case "w": editor.trimAtPlayhead(removeBefore: false)
+        case .escape:
+            bladeMode = false
+            editor.selectOnly(nil)
+        case .space: editor.togglePlayback()
+        case .leftArrow:
+            editor.seek(to: editor.currentTime - (press.modifiers.contains(.shift) ? 1 :
+                1 / editor.project.frameRate))
+        case .rightArrow:
+            editor.seek(to: editor.currentTime + (press.modifiers.contains(.shift) ? 1 :
+                1 / editor.project.frameRate))
+        default: return .ignored
+        }
+        return .handled
+    }
+
+    private func focusTimeline() {
+        timelineFocused = false
+        DispatchQueue.main.async { timelineFocused = true }
     }
 
     private func syncInspector() {

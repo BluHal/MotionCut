@@ -22,12 +22,18 @@ struct MotionCutApp: App {
                     .keyboardShortcut("s")
             }
             CommandGroup(after: .pasteboard) {
+                Button("Select All Timeline Clips") { editor.selectAllClips() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
                 Button("Split at Playhead") { editor.splitAtPlayhead() }
                     .keyboardShortcut("b")
+                Button("Cut Before Playhead") { editor.trimAtPlayhead(removeBefore: true) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button("Cut After Playhead") { editor.trimAtPlayhead(removeBefore: false) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 Button("Delete Clip") { editor.deleteSelected(ripple: false) }
-                    .keyboardShortcut(.delete, modifiers: [])
+                    .keyboardShortcut(.delete, modifiers: [.command])
                 Button("Ripple Delete") { editor.deleteSelected(ripple: true) }
-                    .keyboardShortcut(.delete, modifiers: [.shift])
+                    .keyboardShortcut(.delete, modifiers: [.command, .shift])
                 Button("Undo") { editor.undo() }.keyboardShortcut("z")
                 Button("Redo") { editor.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])

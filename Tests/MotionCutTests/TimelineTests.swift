@@ -91,4 +91,78 @@ final class TimelineTests: XCTestCase {
             from: JSONEncoder().encode(project))
         XCTAssertEqual(decoded, project)
     }
+
+    func testGroupMoveAcrossTracksKeepsRelativeTimingAndRejectsLockedLane() {
+        var project = EditingProject()
+        let first = TimelineClip(title: "One", start: 1, duration: 2)
+        let second = TimelineClip(title: "Two", start: 4, duration: 2)
+        project.tracks[1].clips = [first, second]
+        XCTAssertTrue(project.move([first.id, second.id], by: 3, trackOffset: -1))
+        XCTAssertEqual(project.tracks[0].clips.map(\.start), [4, 7])
+        XCTAssertEqual(project.tracks[1].clips.count, 0)
+        project.tracks[1].isLocked = true
+        let unchanged = project
+        XCTAssertFalse(project.move([first.id, second.id], by: -2, trackOffset: 1))
+        XCTAssertEqual(project, unchanged)
+    }
+
+    func testBladeDragSplitsRangeAcrossTracksAndSelectsMiddle() {
+        var project = EditingProject()
+        let video = TimelineClip(title: "Video", start: 0, duration: 10)
+        let audio = TimelineClip(title: "Audio", start: 0, duration: 10)
+        project.tracks[1].clips = [video]
+        project.tracks[2].clips = [audio]
+        let middle = project.cutRange(from: 6, to: 2)
+        XCTAssertEqual(middle.count, 2)
+        XCTAssertEqual(project.tracks[1].clips.map(\.duration), [2, 4, 4])
+        XCTAssertEqual(project.tracks[2].clips.map(\.start), [0, 2, 6])
+        XCTAssertTrue(project.tracks.flatMap(\.clips)
+            .filter { middle.contains($0.id) }.allSatisfy { $0.start == 2 && $0.end == 6 })
+    }
+
+    func testCutBeforeAndAfterPreservesSourceOffset() {
+        var project = EditingProject()
+        let source = MediaAsset(url: URL(fileURLWithPath: "/tmp/source.mov"),
+                                kind: .video, duration: 20)
+        project.media = [source]
+        let clip = TimelineClip(mediaID: source.id, start: 2, duration: 5, speed: 2)
+        project.tracks[1].clips = [clip]
+        XCTAssertEqual(project.trim([clip.id], at: 4, removeBefore: true), [clip.id])
+        XCTAssertEqual(project.tracks[1].clips[0].start, 4)
+        XCTAssertEqual(project.tracks[1].clips[0].sourceStart, 4)
+        XCTAssertEqual(project.trim([clip.id], at: 6, removeBefore: false), [clip.id])
+        XCTAssertEqual(project.tracks[1].clips[0].duration, 2)
+    }
+
+    func testMultiRippleDeleteClosesDisjointRangesAcrossTracks() {
+        var project = EditingProject()
+        let a = TimelineClip(title: "A", start: 0, duration: 2)
+        let b = TimelineClip(title: "B", start: 2, duration: 2)
+        let c = TimelineClip(title: "C", start: 4, duration: 2)
+        let d = TimelineClip(title: "D", start: 6, duration: 2)
+        let music = TimelineClip(title: "Music", start: 0, duration: 8)
+        project.tracks[1].clips = [a, b, c, d]
+        project.tracks[2].clips = [music]
+        XCTAssertTrue(project.delete([b.id, d.id], ripple: true))
+        XCTAssertEqual(project.tracks[1].clips.map(\.title), ["A", "C"])
+        XCTAssertEqual(project.tracks[1].clips.map(\.start), [0, 2])
+        XCTAssertEqual(project.tracks[2].clips.map(\.duration), [2, 2])
+        XCTAssertEqual(project.duration, 4)
+    }
+
+    @MainActor
+    func testCommandAndShiftSelection() {
+        let editor = StudioModel()
+        let a = TimelineClip(title: "A", start: 0, duration: 1)
+        let b = TimelineClip(title: "B", start: 1, duration: 1)
+        let c = TimelineClip(title: "C", start: 2, duration: 1)
+        editor.project.tracks[1].clips = [a, b, c]
+        editor.selectOnly(a.id)
+        editor.selectClip(c.id, range: true)
+        XCTAssertEqual(editor.selectedClipIDs, [a.id, b.id, c.id])
+        editor.selectClip(b.id, additive: true)
+        XCTAssertEqual(editor.selectedClipIDs, [a.id, c.id])
+        editor.selectClip(c.id)
+        XCTAssertEqual(editor.selectedClipIDs, [c.id])
+    }
 }

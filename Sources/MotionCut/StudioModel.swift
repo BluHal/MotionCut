@@ -12,6 +12,7 @@ final class StudioModel: ObservableObject {
     @Published var isBuilding = false
     @Published var isExporting = false
     @Published var selectedClipID: UUID?
+    @Published var selectedClipIDs: Set<UUID> = []
     @Published var selectedMediaID: UUID?
     @Published var selectedTrackID: UUID?
     @Published var analyzingMedia: Set<UUID> = []
@@ -45,6 +46,39 @@ final class StudioModel: ObservableObject {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     var canExport: Bool { rendered != nil && !isBuilding && !isExporting }
+
+    func selectOnly(_ id: UUID?) {
+        selectedClipID = id
+        selectedClipIDs = id.map { [$0] } ?? []
+        if let id, let location = project.clipLocation(id) {
+            selectedTrackID = project.tracks[location.track].id
+        }
+    }
+
+    func selectClip(_ id: UUID, additive: Bool = false, range: Bool = false) {
+        guard let location = project.clipLocation(id) else { return }
+        if range, let anchor = selectedClipID,
+           let anchorLocation = project.clipLocation(anchor), anchorLocation.track == location.track {
+            let lane = project.tracks[location.track].clips
+            let anchorClip = lane[anchorLocation.clip]
+            let clicked = lane[location.clip]
+            let lower = min(anchorClip.start, clicked.start)
+            let upper = max(anchorClip.end, clicked.end)
+            selectedClipIDs.formUnion(lane.filter { $0.start < upper && $0.end > lower }.map(\.id))
+        } else if additive {
+            if selectedClipIDs.contains(id) { selectedClipIDs.remove(id) }
+            else { selectedClipIDs.insert(id) }
+        } else { selectedClipIDs = [id] }
+        selectedClipID = selectedClipIDs.contains(id) ? id : selectedClipIDs.first
+        selectedTrackID = project.tracks[location.track].id
+    }
+
+    func selectAllClips() {
+        let clips = project.tracks.filter { !$0.isLocked }.flatMap(\.clips)
+        selectedClipIDs = Set(clips.map(\.id))
+        selectedClipID = clips.min(by: { $0.start < $1.start })?.id
+        status = "Selected \(selectedClipIDs.count) clips"
+    }
 
     init() {
         selectedTrackID = project.tracks.first { $0.name == "V1" }?.id
@@ -139,9 +173,13 @@ final class StudioModel: ObservableObject {
     func addMediaToTimeline(_ mediaID: UUID, on trackID: UUID? = nil, at time: Double? = nil) {
         guard let media = project.media.first(where: { $0.id == mediaID }) else { return }
         let kind: TrackKind = media.kind == .audio ? .audio : .video
-        let targetID = trackID ?? selectedTrackID
-        let target = project.tracks.first(where: { $0.id == targetID && $0.kind == kind }) ??
-            project.tracks.first(where: { $0.kind == kind && $0.name.hasSuffix("1") })
+        let target: TimelineTrack?
+        if let trackID {
+            target = project.tracks.first { $0.id == trackID && $0.kind == kind }
+        } else {
+            target = project.tracks.first { $0.id == selectedTrackID && $0.kind == kind } ??
+                project.tracks.first { $0.kind == kind && $0.name.hasSuffix("1") }
+        }
         guard let target, !target.isLocked else { return }
         let start = snap(time ?? currentTime, excluding: nil)
         let clip = TimelineClip(mediaID: media.id, start: start,
@@ -150,37 +188,66 @@ final class StudioModel: ObservableObject {
         commit("Add clip") { project in
             project.tracks[project.tracks.firstIndex(where: { $0.id == target.id })!].clips.append(clip)
         }
-        selectedClipID = clip.id
+        selectOnly(clip.id)
         selectedTrackID = target.id
         if media.kind == .video, analyses[media.id] == nil { analyze(media) }
     }
 
     func splitAtPlayhead() {
-        let target = selectedClipID.flatMap { id in
-            selectedClip.flatMap { currentTime > $0.start + 0.05 && currentTime < $0.end - 0.05 ? id : nil }
-        } ??
-            project.tracks.flatMap(\.clips).first(where: { currentTime > $0.start + 0.05 &&
-                currentTime < $0.end - 0.05 })?.id
-        guard let target else { return }
+        let targets = selectedClipIDs.isEmpty ? Set(project.tracks.flatMap(\.clips)
+            .filter { currentTime > $0.start + 0.05 && currentTime < $0.end - 0.05 }
+            .map(\.id)) : selectedClipIDs
         var copy = project
-        guard let right = copy.split(target, at: currentTime) else { return }
+        let right = copy.split(targets, at: currentTime)
+        guard !right.isEmpty else { return }
         rememberUndo()
         project = copy
-        selectedClipID = right
+        selectedClipIDs = right
+        selectedClipID = right.first
         scheduleRender()
-        status = "Split at \(timecode(currentTime))"
+        status = "Split \(right.count) clip\(right.count == 1 ? "" : "s") at \(timecode(currentTime))"
     }
 
     func deleteSelected(ripple: Bool) {
-        guard let id = selectedClipID else { return }
+        let ids = selectedClipIDs.isEmpty ? Set(selectedClipID.map { [$0] } ?? []) : selectedClipIDs
         var copy = project
-        guard copy.delete(id, ripple: ripple) else { return }
+        guard copy.delete(ids, ripple: ripple) else { return }
         rememberUndo()
         project = copy
-        selectedClipID = nil
-        if ripple { currentTime = min(currentTime, project.duration) }
+        selectOnly(nil)
+        currentTime = min(currentTime, project.duration)
         scheduleRender()
-        status = ripple ? "Ripple deleted clip" : "Deleted clip"
+        status = ripple ? "Ripple deleted clips" : "Deleted clips"
+    }
+
+    func trimAtPlayhead(removeBefore: Bool) {
+        let targets = selectedClipIDs.isEmpty ? Set(project.tracks.flatMap(\.clips)
+            .filter { currentTime > $0.start + 0.05 && currentTime < $0.end - 0.05 }
+            .map(\.id)) : selectedClipIDs
+        var copy = project
+        let changed = copy.trim(targets, at: currentTime, removeBefore: removeBefore)
+        guard !changed.isEmpty else { return }
+        rememberUndo()
+        project = copy
+        selectedClipIDs = changed
+        selectedClipID = changed.first
+        scheduleRender()
+        status = removeBefore ? "Cut before playhead" : "Cut after playhead"
+    }
+
+    func bladeCut(from first: Double, to second: Double) {
+        var copy = project
+        let cuts = copy.cutRange(from: first, to: second)
+        guard !cuts.isEmpty else { return }
+        if copy != project {
+            rememberUndo()
+            project = copy
+            scheduleRender()
+        }
+        selectedClipIDs = cuts
+        selectedClipID = cuts.first
+        currentTime = max(0, min(first, second))
+        status = abs(second - first) > 0.05 ? "Cut range" : "Blade cut"
     }
 
     func moveClip(_ id: UUID, to start: Double, on trackID: UUID) {
@@ -189,9 +256,27 @@ final class StudioModel: ObservableObject {
         guard copy.move(id, to: snapped, on: trackID) else { return }
         rememberUndo()
         project = copy
-        selectedClipID = id
+        selectOnly(id)
         selectedTrackID = trackID
         scheduleRender()
+    }
+
+    func moveSelectedClips(by delta: Double, trackOffset: Int) {
+        let ids = selectedClipIDs
+        guard !ids.isEmpty,
+              let earliest = project.tracks.flatMap(\.clips)
+                .filter({ ids.contains($0.id) }).map(\.start).min() else { return }
+        let snapped = snap(earliest + delta, excluding: ids) - earliest
+        guard abs(snapped) > 0.0001 || trackOffset != 0 else { return }
+        var copy = project
+        guard copy.move(ids, by: snapped, trackOffset: trackOffset) else { return }
+        rememberUndo()
+        project = copy
+        if let selectedClipID, let location = project.clipLocation(selectedClipID) {
+            selectedTrackID = project.tracks[location.track].id
+        }
+        scheduleRender()
+        status = "Moved \(ids.count) clip\(ids.count == 1 ? "" : "s")"
     }
 
     func trimSelected(leading: Double? = nil, trailing: Double? = nil) {
@@ -249,7 +334,7 @@ final class StudioModel: ObservableObject {
                         project.tracks[index].clips.append(audioClip)
                     }
                 }
-                selectedClipID = audioClip.id
+                selectOnly(audioClip.id)
                 selectedTrackID = audioTrack.id
             } catch { errorMessage = error.localizedDescription }
         }
@@ -275,7 +360,7 @@ final class StudioModel: ObservableObject {
         commit("Add title") { project in
             project.tracks[project.tracks.firstIndex(where: { $0.id == track.id })!].clips.append(clip)
         }
-        selectedClipID = clip.id
+        selectOnly(clip.id)
         selectedTrackID = track.id
     }
 
@@ -284,7 +369,7 @@ final class StudioModel: ObservableObject {
         planGeneration += 1
         project = EditingProject()
         projectURL = nil
-        selectedClipID = nil
+        selectOnly(nil)
         selectedMediaID = nil
         selectedTrackID = project.tracks.first { $0.name == "V1" }?.id
         analyses = [:]
@@ -519,7 +604,7 @@ final class StudioModel: ObservableObject {
             smoothness = loaded.stabilizationSmoothness
             maxZoom = loaded.stabilizationMaxZoom
             projectURL = url
-            selectedClipID = nil
+            selectOnly(nil)
             selectedMediaID = nil
             selectedTrackID = loaded.tracks.first { $0.name == "V1" }?.id
             analyses = [:]
@@ -541,7 +626,7 @@ final class StudioModel: ObservableObject {
         guard let previous = undoStack.popLast() else { return }
         redoStack.append(project)
         project = previous
-        selectedClipID = nil
+        selectOnly(nil)
         scheduleRender()
     }
 
@@ -549,7 +634,7 @@ final class StudioModel: ObservableObject {
         guard let next = redoStack.popLast() else { return }
         undoStack.append(project)
         project = next
-        selectedClipID = nil
+        selectOnly(nil)
         scheduleRender()
     }
 
@@ -569,10 +654,14 @@ final class StudioModel: ObservableObject {
     }
 
     private func snap(_ time: Double, excluding id: UUID?) -> Double {
+        snap(time, excluding: id.map { [$0] } ?? [])
+    }
+
+    private func snap(_ time: Double, excluding ids: Set<UUID>) -> Double {
         let frame = 1 / max(1, project.frameRate)
         let value = max(0, (time / frame).rounded() * frame)
         let boundaries = [currentTime] + project.tracks.flatMap(\.clips)
-            .filter { $0.id != id }.flatMap { [$0.start, $0.end] }
+            .filter { !ids.contains($0.id) }.flatMap { [$0.start, $0.end] }
         guard let near = boundaries.min(by: { abs($0 - value) < abs($1 - value) }),
               abs(near - value) < 0.12 else { return value }
         return near
