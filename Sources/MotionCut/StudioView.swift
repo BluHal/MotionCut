@@ -623,17 +623,22 @@ struct StudioView: View {
                         ForEach(editor.project.tracks) { track in trackHeader(track) }
                     }.frame(width: 122)
                     Divider().overlay(StudioStyle.line)
-                    ScrollView(.horizontal) {
-                        let timelineWidth = max(1000, CGFloat(editor.duration + 5) * timelineZoom)
-                        VStack(spacing: 0) {
-                            ruler(width: timelineWidth)
-                            ForEach(editor.project.tracks) { track in
-                                trackLane(track, width: timelineWidth)
+                    GeometryReader { geometry in
+                        let timelineWidth = max(geometry.size.width,
+                                                CGFloat(editor.duration + 5) * timelineZoom)
+                        ScrollView(.horizontal) {
+                            VStack(spacing: 0) {
+                                ruler(width: timelineWidth)
+                                ForEach(editor.project.tracks) { track in
+                                    trackLane(track, width: timelineWidth)
+                                }
                             }
+                            .frame(width: timelineWidth)
                         }
-                        .frame(width: timelineWidth)
+                        .background(StudioStyle.field)
                     }
-                    .background(StudioStyle.field)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 30 + CGFloat(editor.project.tracks.count) * 45)
                 }
                 Spacer(minLength: 0)
             }
